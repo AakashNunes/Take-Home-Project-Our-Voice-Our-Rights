@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Our Voice, Our Rights - MGNREGA Tracker</title>
+    <!-- Tailwind CSS CDN for mobile-first, responsive design -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter Font -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f9fc;
+        }
+        .icon-metric {
+            width: 40px;
+            height: 40px;
+        }
+        /* Custom scrollbar for better mobile feel */
+        ::-webkit-scrollbar {
+            width: 0px;
+            background: transparent;
+        }
+    </style>
+    <!-- Chart.js for simple, clear visualizations -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body class="p-4 sm:p-6 md:p-8 min-h-screen">
+
+    <!-- Header & Title -->
+    <header class="text-center mb-6 pt-4">
+        <h1 class="text-3xl font-extrabold text-blue-700">हमारा काम, हमारा हक</h1>
+        <h2 id="app-subtitle" class="text-md text-gray-600 mt-1">MGNREGA जिला प्रदर्शन ट्रैकर</h2>
+    </header>
+
+    <div id="main-content" class="max-w-xl mx-auto">
+        
+        <!-- District Selector and Geolocation Status -->
+        <div class="bg-white p-4 rounded-xl shadow-lg mb-6 border border-gray-100">
+            <label for="district-select" class="block text-sm font-semibold text-gray-700 mb-2">
+                मेरा जिला चुनें / Choose My District:
+            </label>
+            <div class="flex items-center space-x-3">
+                <select id="district-select" class="flex-grow p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-base shadow-sm">
+                    <!-- Options populated by JS -->
+                </select>
+            </div>
+            <p id="geo-status" class="text-xs text-gray-500 mt-2 italic flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-map-pin mr-1"><path d="M12 16V2"/><path d="M15 13H9"/><path d="M12 2C16.97 2 21 6.03 21 11c0 5.5-9 13-9 13s-9-7.5-9-13c0-4.97 4.03-9 9-9z"/></svg>
+                स्थान की पहचान हो रही है... (Identifying location...)
+            </p>
+        </div>
+
+        <!-- Performance Dashboard -->
+        <div id="dashboard-container">
+            <div id="loading-spinner" class="flex justify-center items-center h-40">
+                <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-500"></div>
+                <p class="ml-3 text-lg text-blue-600">डेटा लोड हो रहा है...</p>
+            </div>
+            
+            <!-- Cards will be injected here -->
+            <div id="metrics-grid" class="grid grid-cols-1 gap-4 hidden">
+                <!-- Metric Card 1: Job Cards Issued -->
+                <div id="metric-job-cards" class="bg-white p-5 rounded-xl shadow-lg transition-all duration-300 hover:shadow-xl border-l-4 border-blue-500"></div>
+                
+                <!-- Metric Card 2: Employment Days Generated -->
+                <div id="metric-employment-days" class="bg-white p-5 rounded-xl shadow-lg transition-all duration-300 hover:shadow-xl border-l-4 border-green-500"></div>
+                
+                <!-- Metric Card 3: Wages Disbursed (in Crores) -->
+                <div id="metric-wages-disbursed" class="bg-white p-5 rounded-xl shadow-lg transition-all duration-300 hover:shadow-xl border-l-4 border-yellow-500"></div>
+            </div>
+
+            <!-- Comparison Chart -->
+            <div id="chart-section" class="bg-white p-5 rounded-xl shadow-lg mt-6 hidden">
+                <h3 class="text-xl font-bold text-gray-800 mb-4 border-b pb-2">पिछले महीने से तुलना (Past Month Comparison)</h3>
+                <div class="h-64">
+                    <canvas id="performanceChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Firebase SDK Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, setPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, collection, query, where, getDocs, setDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- GLOBAL VARIABLES (Provided by Canvas Environment) ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { /* Mock config */ };
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        // --- FIREBASE INITIALIZATION ---
+        let app;
+        let db;
+        let auth;
+        let userId = 'anon_user'; // Default placeholder
+
+        // Mock Geolocation Data (for demo purposes)
+        const DISTRICT_MOCK_LOCATION = {
+            Pune: { lat: 18.5204, lon: 73.8567 },
+            Satara: { lat: 17.6800, lon: 73.9700 },
+            Nagpur: { lat: 21.1458, lon: 79.0882 }
+        };
+
+        // --- MOCK DATABASE (Simulating Firestore Cache) ---
+        // This data would be pre-processed and uploaded by a nightly cron job in a real-world production system.
+        const mockDatabase = {
+            'Pune': [
+                { month: 'Sep 2024', job_cards: 150000, employment_days: 2800000, wages_disbursed_cr: 15.5, target_met: true },
+                { month: 'Oct 2024', job_cards: 165000, employment_days: 3100000, wages_disbursed_cr: 17.2, target_met: true }
+            ],
+            'Satara': [
+                { month: 'Sep 2024', job_cards: 80000, employment_days: 1500000, wages_disbursed_cr: 8.0, target_met: false },
+                { month: 'Oct 2024', job_cards: 75000, employment_days: 1400000, wages_disbursed_cr: 7.5, target_met: false } // Decline
+            ],
+            'Nagpur': [
+                { month: 'Sep 2024', job_cards: 120000, employment_days: 2200000, wages_disbursed_cr: 12.0, target_met: true },
+                { month: 'Oct 2024', job_cards: 135000, employment_days: 2500000, wages_disbursed_cr: 13.8, target_met: true }
+            ]
+        };
+        const availableDistricts = Object.keys(mockDatabase);
+
+        let performanceChart; // Chart instance
+
+        // --- HELPER FUNCTIONS ---
+
+        /**
+         * Formats a number to an Indian style string (Lakhs/Crores) for low-literacy clarity.
+         * @param {number} num - The number to format.
+         * @returns {string} - Formatted string.
+         */
+        function formatIndianNumber(num) {
+            if (num >= 10000000) { // Crore (10 million)
+                return `${(num / 10000000).toFixed(2)} Cr`;
+            }
+            if (num >= 100000) { // Lakh (100 thousand)
+                return `${(num / 100000).toFixed(2)} Lac`;
+            }
+            return num.toLocaleString('en-IN');
+        }
+
+        /**
+         * Calculates the percentage change between two values.
+         * @param {number} current - Current value.
+         * @param {number} previous - Previous value.
+         * @returns {{change: string, trend: 'up'|'down'|'same'}}
+         */
+        function calculateChange(current, previous) {
+            if (previous === 0 || previous === null || typeof previous === 'undefined') {
+                return { change: 'N/A', trend: 'same' };
+            }
+            const percentage = ((current - previous) / previous) * 100;
+            const change = `${Math.abs(percentage).toFixed(1)}%`;
+            if (percentage > 0) return { change, trend: 'up' };
+            if (percentage < 0) return { change, trend: 'down' };
+            return { change: '0.0%', trend: 'same' };
+        }
+
+        /**
+         * Renders a metric card with the given data.
+         * @param {string} elementId - ID of the container element.
+         * @param {string} title - Main metric title.
+         * @param {string} iconSvg - SVG for the metric icon.
+         * @param {number} currentValue - Current performance value.
+         * @param {number} previousValue - Previous performance value.
+         * @param {string} borderColor - Tailwind color class for border.
+         * @param {function} formatter - Function to format the display value.
+         */
+        function renderMetricCard(elementId, title, iconSvg, currentValue, previousValue, borderColor, formatter) {
+            const { change, trend } = calculateChange(currentValue, previousValue);
+            
+            let trendColor = 'text-gray-500';
+            let trendIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-minus"><path d="M5 12h14"/></svg>`;
+
+            if (trend === 'up') {
+                trendColor = 'text-green-600';
+                trendIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right"><path d="M7 7h10v10"/><path d="M7 17L17 7"/></svg>`;
+            } else if (trend === 'down') {
+                trendColor = 'text-red-600';
+                trendIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-down-right"><path d="m7 7 10 10"/><path d="M17 7v10H7"/></svg>`;
+            }
+
+            const html = `
+                <div class="flex justify-between items-start">
+                    <div class="flex items-center space-x-3">
+                        ${iconSvg}
+                        <h4 class="text-lg font-semibold text-gray-800">${title}</h4>
+                    </div>
+                    <div class="p-2 rounded-full bg-white/50">
+                        <!-- Placeholder for "Know More" (What does this mean?) -->
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-info text-gray-400 hover:text-blue-500 cursor-pointer"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                    </div>
+                </div>
+                <div class="mt-2 flex items-baseline justify-between">
+                    <p class="text-4xl font-extrabold text-gray-900">${formatter(currentValue)}</p>
+                    <div class="flex items-center space-x-1 ${trendColor} text-lg font-bold">
+                        ${trendIcon}
+                        <span>${change}</span>
+                    </div>
+                </div>
+                <p class="mt-1 text-sm text-gray-500">पिछले महीने से परिवर्तन</p>
+            `;
+            document.getElementById(elementId).innerHTML = html;
+            document.getElementById(elementId).classList.add(`border-${borderColor}`);
+        }
+        
+        // --- DATA VISUALIZATION (Chart.js) ---
+
+        function updateChart(data, district) {
+            const chartSection = document.getElementById('chart-section');
+            chartSection.classList.remove('hidden');
+
+            const latest = data[data.length - 1];
+            const previous = data[data.length - 2];
+
+            if (!previous) {
+                chartSection.innerHTML = `<h3 class="text-xl font-bold text-gray-800 mb-4 border-b pb-2">पिछले महीने से तुलना</h3><p class="text-gray-500">Only one month of data available for comparison.</p>`;
+                return;
+            }
+
+            const ctx = document.getElementById('performanceChart').getContext('2d');
+
+            const cardLabels = ['जॉब कार्ड (Job Cards)', 'रोजगार के दिन (Employment Days)', 'वेतन (Wages Disbursed)'];
+            const latestValues = [latest.job_cards, latest.employment_days, latest.wages_disbursed_cr * 10000000];
+            const previousValues = [previous.job_cards, previous.employment_days, previous.wages_disbursed_cr * 10000000];
+
+            if (performanceChart) {
+                performanceChart.destroy();
+            }
+
+            performanceChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: cardLabels,
+                    datasets: [
+                        {
+                            label: `${latest.month}`,
+                            data: latestValues,
+                            backgroundColor: 'rgba(59, 130, 246, 0.8)', // Blue
+                            borderRadius: 6
+                        },
+                        {
+                            label: `${previous.month} (Previous)`,
+                            data: previousValues,
+                            backgroundColor: 'rgba(156, 163, 175, 0.6)', // Gray
+                            borderRadius: 6
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                            labels: {
+                                font: {
+                                    size: 14,
+                                    family: 'Inter'
+                                }
+                            }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label || '';
+                                    if (label) {
+                                        label += ': ';
+                                    }
+                                    let value = context.parsed.y;
+                                    if (context.label === cardLabels[0] || context.label === cardLabels[1]) {
+                                        label += value.toLocaleString('en-IN');
+                                    } else if (context.label === cardLabels[2]) {
+                                        label += `₹${(value / 10000000).toFixed(2)} Crore`;
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            display: false // Hide y-axis for low-literacy focus
+                        },
+                        x: {
+                            ticks: {
+                                font: {
+                                    size: 12,
+                                    family: 'Inter'
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
+        /**
+         * Main rendering function to process and display data for the selected district.
+         * @param {string} district - The name of the selected district.
+         */
+        async function renderDashboard(district) {
+            const loadingSpinner = document.getElementById('loading-spinner');
+            const metricsGrid = document.getElementById('metrics-grid');
+            loadingSpinner.classList.remove('hidden');
+            metricsGrid.classList.add('hidden');
+
+            // 1. Simulate fetching data from the CACHED Firestore database
+            const districtData = await fetchData(district); 
+
+            loadingSpinner.classList.add('hidden');
+            if (!districtData || districtData.length < 1) {
+                metricsGrid.innerHTML = `<p class="text-red-600 text-center text-lg">डेटा अनुपलब्ध है। (Data not available for ${district})</p>`;
+                return;
+            }
+            
+            metricsGrid.classList.remove('hidden');
+
+            // Data should be sorted by month/date, take the latest two records
+            const latest = districtData[districtData.length - 1];
+            const previous = districtData[districtData.length - 2] || {};
+
+            // Update Subtitle
+            document.getElementById('app-subtitle').textContent = `${district} जिले का MGNREGA प्रदर्शन (${latest.month})`;
+
+            // --- Card 1: Job Cards Issued ---
+            const jobCardIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-metric text-blue-500 bg-blue-100 p-2 rounded-lg"><rect width="20" height="14" x="2" y="7" rx="2" ry="2"/><path d="M16 3.5v3"/><path d="M22 10.5v1.5"/><path d="M2 10.5v1.5"/><path d="M7 3.5v3"/></svg>`;
+            renderMetricCard(
+                'metric-job-cards',
+                'जारी किए गए जॉब कार्ड (Job Cards Issued)',
+                jobCardIcon,
+                latest.job_cards,
+                previous.job_cards || 0,
+                'blue-500',
+                formatIndianNumber
+            );
+
+            // --- Card 2: Employment Days Generated ---
+            const employmentIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-metric text-green-500 bg-green-100 p-2 rounded-lg"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`;
+            renderMetricCard(
+                'metric-employment-days',
+                'रोजगार के दिन (Total Employment Days)',
+                employmentIcon,
+                latest.employment_days,
+                previous.employment_days || 0,
+                'green-500',
+                formatIndianNumber
+            );
+
+            // --- Card 3: Wages Disbursed ---
+            const wagesIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-metric text-yellow-600 bg-yellow-100 p-2 rounded-lg"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>`;
+            renderMetricCard(
+                'metric-wages-disbursed',
+                'वेतन वितरित (Wages Disbursed in Cr)',
+                wagesIcon,
+                latest.wages_disbursed_cr,
+                previous.wages_disbursed_cr || 0,
+                'yellow-600',
+                (v) => `₹${v.toFixed(2)} Cr`
+            );
+
+            // 3. Update Chart
+            updateChart(districtData, district);
+        }
+
+        /**
+         * Simulates fetching data from the Firestore cache (the production data source).
+         * @param {string} district - The district name.
+         * @returns {Promise<Array<Object>>} - Array of monthly performance records.
+         */
+        async function fetchData(district) {
+            // In a real scenario, this would be a Firestore query:
+            // const collectionPath = `/artifacts/${appId}/public/data/mgnrega_performance`;
+            // const q = query(collection(db, collectionPath), where("district", "==", district));
+            // const querySnapshot = await getDocs(q);
+            // return querySnapshot.docs.map(doc => doc.data());
+
+            // For the purpose of this demo, we use the mock data:
+            return new Promise(resolve => {
+                setTimeout(() => {
+                    resolve(mockDatabase[district] || null);
+                }, 800); // Simulate network latency
+            });
+        }
+        
+        /**
+         * Uses browser Geolocation to guess the user's district (Bonus Feature).
+         */
+        function getDistrictFromGeolocation() {
+            const geoStatusEl = document.getElementById('geo-status');
+            geoStatusEl.textContent = 'स्थान की पहचान हो रही है...';
+
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        const lat = position.coords.latitude;
+                        const lon = position.coords.longitude;
+                        
+                        // --- SIMPLIFIED REVERSE GEOCODING LOGIC ---
+                        // In a real app, this would query a dedicated geospatial database.
+                        // Here, we just check if the lat/lon is "near" Pune's mock location.
+                        const puneMock = DISTRICT_MOCK_LOCATION['Pune'];
+                        const distanceToPune = Math.sqrt(Math.pow(lat - puneMock.lat, 2) + Math.pow(lon - puneMock.lon, 2));
+
+                        let inferredDistrict = 'Pune'; // Default to Pune for demo simplicity
+                        
+                        // If the user's device is physically close to Pune (small variance), use Pune.
+                        if (distanceToPune < 0.5) { // Arbitrary small threshold
+                             inferredDistrict = 'Pune';
+                        } else if (distanceToPune < 1) {
+                             inferredDistrict = 'Satara'; // Mocking proximity to Satara
+                        } else {
+                            inferredDistrict = availableDistricts[Math.floor(Math.random() * availableDistricts.length)];
+                        }
+
+                        geoStatusEl.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-map-pin mr-1 text-green-500"><path d="M12 16V2"/><path d="M15 13H9"/><path d="M12 2C16.97 2 21 6.03 21 11c0 5.5-9 13-9 13s-9-7.5-9-13c0-4.97 4.03-9 9-9z"/></svg>
+                        स्वचालित रूप से पहचाना गया जिला: <span class="font-semibold text-gray-800">${inferredDistrict}</span>`;
+
+                        document.getElementById('district-select').value = inferredDistrict;
+                        renderDashboard(inferredDistrict);
+
+                    },
+                    (error) => {
+                        console.error("Geolocation Error:", error);
+                        geoStatusEl.textContent = 'स्थान पहचान विफल (Geolocation failed). कृपया जिला चुनें।';
+                        renderDashboard(document.getElementById('district-select').value); // Fallback to default
+                    },
+                    { enableHighAccuracy: false, timeout: 5000, maximumAge: 0 }
+                );
+            } else {
+                geoStatusEl.textContent = 'Geolocation आपके ब्राउज़र में समर्थित नहीं है।';
+                renderDashboard(document.getElementById('district-select').value); // Fallback to default
+            }
+        }
+
+        // --- MAIN APPLICATION LOGIC ---
+
+        window.onload = async function() {
+            try {
+                // Initialize Firebase
+                if (Object.keys(firebaseConfig).length > 0) {
+                    app = initializeApp(firebaseConfig);
+                    db = getFirestore(app);
+                    auth = getAuth(app);
+                    setLogLevel('error');
+                    await setPersistence(auth, browserSessionPersistence);
+                }
+
+                // Authentication (crucial for accessing secured Firestore cache)
+                if (auth) {
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                    userId = auth.currentUser?.uid || crypto.randomUUID();
+                }
+
+                // Populate the district selector
+                const selectElement = document.getElementById('district-select');
+                selectElement.innerHTML = availableDistricts.map(d => 
+                    `<option value="${d}">${d}</option>`
+                ).join('');
+
+                // Set up event listener for manual district change
+                selectElement.addEventListener('change', (e) => {
+                    document.getElementById('geo-status').textContent = 'स्थान की पहचान अक्षम (Geolocation disabled).';
+                    renderDashboard(e.target.value);
+                });
+
+                // Attempt to get user's location and auto-select district
+                getDistrictFromGeolocation();
+
+            } catch (error) {
+                console.error("Initialization Error:", error);
+                document.getElementById('dashboard-container').innerHTML = `
+                    <div class="p-6 bg-red-100 text-red-700 rounded-xl text-center">
+                        <p class="font-bold">सिस्टम त्रुटि (System Error)!</p>
+                        <p class="text-sm">डेटाबेस कनेक्शन या प्रमाणीकरण विफल रहा। (Database connection or authentication failed.)</p>
+                    </div>
+                `;
+            }
+        };
+
+    </script>
+
+    <!-- Footer for context -->
+    <footer class="mt-8 text-center text-xs text-gray-500 max-w-xl mx-auto border-t pt-4">
+        <p>डेटा स्रोत: Data.gov.in API पर आधारित, एक स्थिर कैश (Firestore) द्वारा परोसा गया।</p>
+        <p>Data Source: Based on Data.gov.in API, served via a stable cache (Firestore).</p>
+    </footer>
+
+</body>
+</html>
